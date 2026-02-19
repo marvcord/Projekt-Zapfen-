@@ -1,0 +1,72 @@
+import cv2
+import torch
+import torchvision.transforms as transforms
+from PIL import Image
+
+# 1. Hardware-Beschleunigung aktivieren (CUDA für Jetson Nano)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Nutze Gerät: {device}")
+
+# 2. Modell laden 
+# HINWEIS: 'mein_fehler_modell.pth' ist ein Platzhalter. 
+# Du musst vorher ein Modell (z.B. ResNet18) mit Bildern deiner Bauteile trainieren.
+try:
+    model = torch.load('mein_fehler_modell.pth')
+    model.eval() # Bewertungsmodus aktivieren
+    model.to(device)
+except FileNotFoundError:
+    print("Fehler: Modell-Datei 'mein_fehler_modell.pth' nicht gefunden.")
+    print("Bitte platziere ein trainiertes PyTorch-Modell im selben Ordner.")
+    exit()
+
+# 3. Fehler-Klassen definieren (an dein Training anpassen)
+klassen = ['Einwandfrei', 'Kratzer', 'Riss', 'Delle_oder_Verformung']
+
+# 4. Bild-Vorverarbeitung für das KI-Modell
+transform = transforms.Compose([
+    transforms.Resize((224, 224)), # Standardgröße für die meisten Modelle
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+])
+
+def analysiere_bauteil(bildpfad):
+    """Lädt ein Bild, analysiert es auf Fehler und zeigt das Ergebnis."""
+    
+    # Bild mit OpenCV laden
+    img_cv = cv2.imread(bildpfad)
+    if img_cv is None:
+        print(f"Fehler: Konnte das Bild {bildpfad} nicht laden.")
+        return
+
+    # OpenCV nutzt standardmäßig BGR, PyTorch Modelle erwarten oft RGB
+    img_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
+    img_pil = Image.fromarray(img_rgb)
+
+    # Bild transformieren und für das Modell vorbereiten (Batch-Dimension hinzufügen)
+    img_tensor = transform(img_pil).unsqueeze(0).to(device)
+
+    # Inferenz (Vorhersage) durchführen
+    with torch.no_grad():
+        vorhersage = model(img_tensor)
+        _, vorhergesagter_index = torch.max(vorhersage, 1)
+        
+        # Den Namen des Fehlers aus der Liste holen
+        erkannter_fehler = klassen[vorhergesagter_index.item()]
+
+    # Ergebnis in der Konsole ausgeben
+    print(f"--- Analyse abgeschlossen ---")
+    print(f"Bauteil: {bildpfad}")
+    print(f"Ergebnis: {erkannter_fehler}")
+
+    # Text direkt in das Bild schreiben und anzeigen
+    farbe = (0, 255, 0) if erkannter_fehler == 'Einwandfrei' else (0, 0, 255) # Grün für OK, Rot für Fehler
+    cv2.putText(img_cv, f"Status: {erkannter_fehler}", (30, 50), 
+                cv2.FONT_HERSHEY_SIMPLEX, 1, farbe, 2)
+    
+    cv2.imshow("Qualitaetskontrolle - Jetson Nano", img_cv)
+    cv2.waitKey(0) # Wartet, bis eine Taste gedrückt wird
+    cv2.destroyAllWindows()
+
+# --- Testlauf ---
+# Ersetze 'test_bild.jpg' mit dem Pfad zu einem Foto deines Bauteils
+analysiere_bauteil('test_bild.jpg')
